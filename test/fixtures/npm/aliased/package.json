@@ -1,0 +1,1 @@
+{"name":"aliased","version":"1.0.0","private":true,"dependencies":{"my-lodash":"npm:lodash.kebabcase@4.1.1"}}

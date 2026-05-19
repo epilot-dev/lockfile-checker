@@ -1,0 +1,38 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      lodash.kebabcase:
+        specifier: 4.1.1
+        version: 4.1.1
+
+  apps/a: {}
+
+  apps/b:
+    dependencies:
+      '@ws/a':
+        specifier: workspace:*
+        version: link:../a
+      lodash.snakecase:
+        specifier: 4.1.1
+        version: 4.1.1
+
+packages:
+
+  lodash.kebabcase@4.1.1:
+    resolution: {integrity: sha512-N8XRTIMMqqDgSy4VLKPnJ/+hpGZN+PHQiJnSenYqPaVV/NCqEogTnAdZLQiGKhxX+JCs8waWq2t1XHWKOmlY8g==}
+
+  lodash.snakecase@4.1.1:
+    resolution: {integrity: sha512-QZ1d4xoBHYUeuouhEq3lk3Uq7ldgyFXGBhg04+oRLnIz8o9T65Eh+8YdroUwn846zchkA9yDsDl5CVVaV2nqYw==}
+
+snapshots:
+
+  lodash.kebabcase@4.1.1: {}
+
+  lodash.snakecase@4.1.1: {}

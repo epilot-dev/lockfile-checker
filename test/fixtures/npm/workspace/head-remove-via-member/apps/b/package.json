@@ -1,0 +1,1 @@
+{ "name": "@ws/b", "version": "1.0.0", "private": true, "dependencies": { "@ws/a": "1.0.0", "lodash.snakecase": "4.1.1" } }

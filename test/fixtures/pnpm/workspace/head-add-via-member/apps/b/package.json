@@ -1,0 +1,1 @@
+{ "name": "@ws/b", "version": "1.0.0", "private": true, "dependencies": { "@ws/a": "workspace:*", "lodash.snakecase": "4.1.1" } }

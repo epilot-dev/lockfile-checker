@@ -1,0 +1,64 @@
+{
+  "name": "@epilot/lockfile-checker",
+  "version": "1.0.1",
+  "description": "CLI that fails if any package version in (or newly added to) a lockfile is younger than a configurable threshold on the npm registry. Defends against supply-chain attacks via a quarantine window.",
+  "author": "epilot GmbH",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/epilot-dev/lockfile-checker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/epilot-dev/lockfile-checker/issues"
+  },
+  "homepage": "https://github.com/epilot-dev/lockfile-checker#readme",
+  "bin": {
+    "lockfile-checker": "./dist/index.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "clean": "rm -rf dist coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm clean && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^2.1.8",
+    "esbuild": "^0.24.2",
+    "snyk-nodejs-lockfile-parser": "2.7.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.1.2",
+      "onFail": "download"
+    }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "keywords": [
+    "lockfile",
+    "supply-chain",
+    "security",
+    "npm",
+    "pnpm",
+    "yarn"
+  ]
+}
