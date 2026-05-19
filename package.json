@@ -1,6 +1,6 @@
 {
   "name": "@epilot/lockfile-checker",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "CLI that fails if any package version in (or newly added to) a lockfile is younger than a configurable threshold on the npm registry. Defends against supply-chain attacks via a quarantine window.",
   "author": "epilot GmbH",
   "license": "MIT",

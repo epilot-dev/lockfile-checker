@@ -362,6 +362,35 @@ describe('integration — config and help', () => {
     expect(code).toBe(2);
   });
 
+  it('exits 2 with a clear message when no lockfile is found at cwd', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const empty = await mkdtemp(join(tmpdir(), 'lq-empty-'));
+    try {
+      const deps = makeDeps({ headDir: empty });
+      const code = await main(deps);
+      expect(code).toBe(2);
+      expect(deps.stderr.raw()).toMatch(/No lockfile found/);
+      expect(deps.stderr.raw()).toMatch(/pnpm-lock\.yaml/);
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('scan over a pnpm shared-workspace-lockfile=false layout finds member lockfiles', async () => {
+    const headDir = join(FIXTURES_ROOT, 'pnpm', 'unshared-workspace', 'base');
+    const deps = makeDeps({
+      headDir,
+      fetch: registryFor({
+        'is-number': { '6.0.0': OLD_ISO },
+        'lodash.kebabcase': { '4.1.1': OLD_ISO },
+      }),
+    });
+    const code = await main(deps);
+    expect(code).toBe(0);
+    expect(deps.stdout.raw()).toMatch(/Scanning 2 package@version/);
+  });
+
   it('diff mode with an unresolvable base ref exits 2', async () => {
     // Reader's readAtRef throws to simulate "unknown revision".
     const headDir = join(FIXTURES_ROOT, 'pnpm', 'base');

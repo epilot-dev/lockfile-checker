@@ -24,6 +24,19 @@ interface LockfileSpec {
 }
 
 /**
+ * A concrete lockfile location to process. `dir` is the directory (relative
+ * to cwd) the lockfile lives in — `.` for the conventional root case, or a
+ * member path like `apps/a` for pnpm's `shared-workspace-lockfile=false`
+ * fallback. `lockfilePath` and `manifestPath` are already prefixed with `dir`.
+ */
+interface LockfileLocation {
+  kind: LockfileKind;
+  dir: string;
+  lockfilePath: string;
+  manifestPath: string;
+}
+
+/**
  * The set of lockfiles this tool understands. Listed in the same order they
  * are probed: a repo mid-migration may have more than one (e.g. yarn → pnpm),
  * and we union their contents.
@@ -75,6 +88,12 @@ export interface ExtractResult {
   setUnderReview: Pkg[];
   lockfileKindsSeen: LockfileKind[];
   warnings: ExtractWarning[];
+  /**
+   * Number of lockfile locations that discovery turned up at HEAD. Zero means
+   * the working directory is not a recognised JS project root — the caller
+   * should treat this as a configuration error rather than a silent pass.
+   */
+  discoveredCount: number;
 }
 
 const SNYK_PARSE_OPTS_PNPM = {
@@ -171,6 +190,82 @@ function manifestName(manifestContent: string): string | null {
     /* fallthrough */
   }
   return null;
+}
+
+/**
+ * Parse the `packages:` array from a `pnpm-workspace.yaml`. The expected shape
+ * is a top-level `packages:` key followed by indented `- 'glob'` entries. We
+ * use a tiny line scanner to avoid pulling in a YAML dependency; the format
+ * is stable and the field is shallow.
+ *
+ * Returns an empty array if `packages:` is absent or malformed. Only consumed
+ * by the `shared-workspace-lockfile=false` fallback in {@link discoverLockfiles}.
+ */
+function parsePnpmWorkspacePackages(content: string): string[] {
+  const out: string[] = [];
+  let inPackages = false;
+  for (const raw of content.split('\n')) {
+    const line = raw.replace(/#.*$/, '');
+    if (/^packages:\s*$/.test(line)) {
+      inPackages = true;
+      continue;
+    }
+    if (!inPackages) continue;
+    // Leaving the section: a non-blank line at column 0 that isn't a list item.
+    if (/^[^\s-]/.test(line)) break;
+    const m = /^\s*-\s*(?:'([^']+)'|"([^"]+)"|(\S+))\s*$/.exec(line);
+    if (m) out.push((m[1] ?? m[2] ?? m[3])!);
+  }
+  return out;
+}
+
+/**
+ * Discover the lockfile locations to process. Probes the three known lockfile
+ * names at the working-directory root, then — if a `pnpm-workspace.yaml`
+ * exists — additionally probes each declared member for its own
+ * `pnpm-lock.yaml`. That second pass is what makes
+ * `shared-workspace-lockfile=false` work: pnpm in that mode emits a near-empty
+ * root lockfile alongside per-member lockfiles, and we want to scan the
+ * member lockfiles too. The check is npm/yarn-irrelevant — those package
+ * managers always emit a single root lockfile in a workspace.
+ *
+ * Skipping a member whose lockfile is absent is silent; that's the normal
+ * `shared-workspace-lockfile=true` case where the root lockfile already
+ * covers it.
+ */
+async function discoverLockfiles(reader: FileReader): Promise<LockfileLocation[]> {
+  const locations: LockfileLocation[] = [];
+  for (const spec of KNOWN_LOCKFILES) {
+    const content = await reader.readHead(spec.lockfilePath);
+    if (content !== null) {
+      locations.push({
+        kind: spec.kind,
+        dir: '.',
+        lockfilePath: spec.lockfilePath,
+        manifestPath: spec.manifestPath,
+      });
+    }
+  }
+
+  const workspaceYaml = await reader.readHead('pnpm-workspace.yaml');
+  if (workspaceYaml === null) return locations;
+  const globs = parsePnpmWorkspacePackages(workspaceYaml);
+  if (globs.length === 0) return locations;
+
+  const memberDirs = await expandSimpleGlobs(globs, (p) => reader.listHeadDir(p));
+  for (const memberDir of memberDirs) {
+    if (memberDir === '.' || memberDir === '') continue; // already covered by root probe
+    const memberLockPath = `${memberDir}/pnpm-lock.yaml`;
+    const memberLock = await reader.readHead(memberLockPath);
+    if (memberLock === null) continue;
+    locations.push({
+      kind: 'pnpm',
+      dir: memberDir,
+      lockfilePath: memberLockPath,
+      manifestPath: `${memberDir}/package.json`,
+    });
+  }
+  return locations;
 }
 
 /**
@@ -563,33 +658,37 @@ export async function extractPackagesUnderReview(opts: {
   const unionBase = new Map<string, Pkg>();
   const kindsSeen: LockfileKind[] = [];
 
-  for (const spec of KNOWN_LOCKFILES) {
-    const headLockfile = await opts.reader.readHead(spec.lockfilePath);
+  const locations = await discoverLockfiles(opts.reader);
+
+  for (const loc of locations) {
+    // discoverLockfiles guarantees the head lockfile exists; re-read so the
+    // content variable in this scope is non-null without an extra branch.
+    const headLockfile = await opts.reader.readHead(loc.lockfilePath);
     if (headLockfile === null) continue;
 
-    const headManifest = await opts.reader.readHead(spec.manifestPath);
+    const headManifest = await opts.reader.readHead(loc.manifestPath);
     if (headManifest === null) {
       warnings.push({
-        message: `Found ${spec.lockfilePath} but no ${spec.manifestPath} at HEAD; skipping ${spec.kind}.`,
+        message: `Found ${loc.lockfilePath} but no ${loc.manifestPath} at HEAD; skipping ${loc.kind}.`,
       });
       continue;
     }
 
-    kindsSeen.push(spec.kind);
+    if (!kindsSeen.includes(loc.kind)) kindsSeen.push(loc.kind);
 
     let headPkgs: Pkg[] | null;
     try {
       headPkgs = await parseSide({
-        kind: spec.kind,
+        kind: loc.kind,
         lockfileContent: headLockfile,
         rootManifestContent: headManifest,
-        readManifest: (p) => opts.reader.readHead(p),
-        listDir: (p) => opts.reader.listHeadDir(p),
+        readManifest: (p) => opts.reader.readHead(joinDir(loc.dir, p)),
+        listDir: (p) => opts.reader.listHeadDir(joinDir(loc.dir, p)),
         sideLabel: 'HEAD',
         warnings,
       });
     } catch (err) {
-      warnings.push({ message: `Failed to parse ${spec.lockfilePath} at HEAD: ${errorMessage(err)}` });
+      warnings.push({ message: `Failed to parse ${loc.lockfilePath} at HEAD: ${errorMessage(err)}` });
       continue;
     }
     if (headPkgs) {
@@ -599,17 +698,17 @@ export async function extractPackagesUnderReview(opts: {
     if (opts.mode !== 'diff') continue;
     if (opts.baseRef === null) continue;
 
-    const baseLockfile = await opts.reader.readAtRef(opts.baseRef, spec.lockfilePath);
+    const baseLockfile = await opts.reader.readAtRef(opts.baseRef, loc.lockfilePath);
     if (baseLockfile === null) {
       warnings.push({
-        message: `Lockfile ${spec.lockfilePath} is new at HEAD (not present at ${opts.baseRef}); the full HEAD set for this lockfile will be checked.`,
+        message: `Lockfile ${loc.lockfilePath} is new at HEAD (not present at ${opts.baseRef}); the full HEAD set for this lockfile will be checked.`,
       });
       continue;
     }
-    const baseManifest = await opts.reader.readAtRef(opts.baseRef, spec.manifestPath);
+    const baseManifest = await opts.reader.readAtRef(opts.baseRef, loc.manifestPath);
     if (baseManifest === null) {
       warnings.push({
-        message: `Lockfile ${spec.lockfilePath} present at ${opts.baseRef} but ${spec.manifestPath} is not; assuming base set is empty for this lockfile.`,
+        message: `Lockfile ${loc.lockfilePath} present at ${opts.baseRef} but ${loc.manifestPath} is not; assuming base set is empty for this lockfile.`,
       });
       continue;
     }
@@ -617,17 +716,17 @@ export async function extractPackagesUnderReview(opts: {
     let basePkgs: Pkg[] | null;
     try {
       basePkgs = await parseSide({
-        kind: spec.kind,
+        kind: loc.kind,
         lockfileContent: baseLockfile,
         rootManifestContent: baseManifest,
-        readManifest: (p) => opts.reader.readAtRef(opts.baseRef!, p),
-        listDir: (p) => opts.reader.listAtRefDir(opts.baseRef!, p),
+        readManifest: (p) => opts.reader.readAtRef(opts.baseRef!, joinDir(loc.dir, p)),
+        listDir: (p) => opts.reader.listAtRefDir(opts.baseRef!, joinDir(loc.dir, p)),
         sideLabel: opts.baseRef,
         warnings,
       });
     } catch (err) {
       warnings.push({
-        message: `Failed to parse ${spec.lockfilePath} at ${opts.baseRef}: ${errorMessage(err)}; assuming base set is empty for this lockfile.`,
+        message: `Failed to parse ${loc.lockfilePath} at ${opts.baseRef}: ${errorMessage(err)}; assuming base set is empty for this lockfile.`,
       });
       continue;
     }
@@ -650,7 +749,18 @@ export async function extractPackagesUnderReview(opts: {
     return a.version < b.version ? -1 : a.version > b.version ? 1 : 0;
   });
 
-  return { setUnderReview, lockfileKindsSeen: kindsSeen, warnings };
+  return {
+    setUnderReview,
+    lockfileKindsSeen: kindsSeen,
+    warnings,
+    discoveredCount: locations.length,
+  };
+}
+
+function joinDir(dir: string, p: string): string {
+  if (dir === '.' || dir === '') return p;
+  if (p === '.' || p === '') return dir;
+  return `${dir}/${p}`;
 }
 
 /**

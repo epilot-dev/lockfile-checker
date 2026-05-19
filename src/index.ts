@@ -64,6 +64,16 @@ export async function main(deps: Deps): Promise<number> {
     return 2;
   }
 
+  if (extracted.discoveredCount === 0) {
+    deps.stderr.write(
+      `No lockfile found at ${deps.cwd}. ` +
+        `Expected one of: pnpm-lock.yaml, package-lock.json, yarn.lock ` +
+        `(or a pnpm-workspace.yaml with member pnpm-lock.yaml files for shared-workspace-lockfile=false).\n` +
+        `Run lockfile-checker from the directory that contains your lockfile.\n`,
+    );
+    return 2;
+  }
+
   const { checked } = applyFilters(
     extracted.setUnderReview,
     config.allowedPackages,

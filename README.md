@@ -2,7 +2,7 @@
 
 A CLI that fails if any package version in (or newly added to) a lockfile is younger than a configurable threshold on the npm registry. Defends against npm supply-chain attacks (Shai-Hulud-style malicious releases of legitimate packages) by enforcing a **quarantine window**.
 
-Works with `pnpm-lock.yaml`, `package-lock.json`, and `yarn.lock` (both v1 and berry), in single-package and workspace repos.
+Works with `pnpm-lock.yaml`, `package-lock.json`, and `yarn.lock` (both v1 and berry), in single-package and workspace repos. For pnpm workspaces with `shared-workspace-lockfile=false`, the tool also discovers per-member `pnpm-lock.yaml` files automatically.
 
 ## Install
 
@@ -66,7 +66,7 @@ Every flag has an environment-variable equivalent. Precedence: **CLI flag > env 
 | --- | --- |
 | `0` | No offenders. |
 | `1` | At least one offender. Or a registry error if `--fail-on-registry-error` is set. |
-| `2` | Invalid configuration: unknown flag, diff mode in a non-git directory, unresolvable base ref. |
+| `2` | Invalid configuration: unknown flag, diff mode in a non-git directory, unresolvable base ref, or no lockfile present at the working directory. |
 
 Distinguishing `1` (legitimate "blocked" outcome) from `2` (misconfiguration) lets callers handle them differently — a typical CI gate fails the job on `1` and quarantines the runner / pings infra on `2`.
 
@@ -106,6 +106,7 @@ It also does not detect packages that were yanked, unpublished, or republished w
 ## Limitations
 
 - The tool always queries the **registry referenced by `--registry`** (default: the public npm registry) for every package not filtered by `--allow` or `--allow-scope`. Internal packages must be added to one of those lists.
+- The working directory must contain a lockfile (or a `pnpm-workspace.yaml` whose members do). The tool does **not** recursively walk arbitrary nested directories looking for lockfiles — invoke it from the project root.
 
 ## License
 
