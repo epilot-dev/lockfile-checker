@@ -268,7 +268,8 @@ describe('createFileReader — directory listing', () => {
       },
       exec: async (cmd, args) => {
         expect(cmd).toBe('git');
-        expect(args).toEqual(['ls-tree', '-d', '--name-only', 'main:apps/']);
+        if (args[0] === 'rev-parse') return { stdout: '', stderr: '', code: 0 };
+        expect(args).toEqual(['ls-tree', '-d', '--name-only', '--full-tree', 'main:apps/']);
         return { stdout: 'apps/a\napps/b\n', stderr: '', code: 0 };
       },
     });
@@ -282,11 +283,10 @@ describe('createFileReader — directory listing', () => {
         readFile: async () => '',
         readdir: async () => [],
       },
-      exec: async () => ({
-        stdout: '',
-        stderr: "fatal: not a tree object 'main:nope/'",
-        code: 128,
-      }),
+      exec: async (_cmd, args) => {
+        if (args[0] === 'rev-parse') return { stdout: '', stderr: '', code: 0 };
+        return { stdout: '', stderr: "fatal: Not a valid object name main:nope/", code: 128 };
+      },
     });
     expect(await reader.listAtRefDir('main', 'nope')).toBeNull();
   });
@@ -315,7 +315,8 @@ describe('createFileReader — directory listing', () => {
         readdir: async () => [],
       },
       exec: async (_cmd, args) => {
-        expect(args).toEqual(['ls-tree', '-d', '--name-only', 'main:']);
+        if (args[0] === 'rev-parse') return { stdout: '', stderr: '', code: 0 };
+        expect(args).toEqual(['ls-tree', '-d', '--name-only', '--full-tree', 'main:']);
         return { stdout: 'apps\nsrc\n', stderr: '', code: 0 };
       },
     });

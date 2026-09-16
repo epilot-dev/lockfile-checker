@@ -117,8 +117,12 @@ describe('createFileReader', () => {
       },
       exec: async (cmd, args, cwd) => {
         expect(cmd).toBe('git');
-        expect(args).toEqual(['show', 'origin/main:package.json']);
         expect(cwd).toBe('/anywhere');
+        if (args[0] === 'rev-parse') {
+          expect(args).toEqual(['rev-parse', '--show-prefix']);
+          return { stdout: '\n', stderr: '', code: 0 };
+        }
+        expect(args).toEqual(['show', 'origin/main:package.json']);
         return { stdout: '{"name":"ok"}', stderr: '', code: 0 };
       },
     });
@@ -132,11 +136,10 @@ describe('createFileReader', () => {
         readFile: async () => '',
         readdir: async () => [],
       },
-      exec: async () => ({
-        stdout: '',
-        stderr: "fatal: path 'foo' does not exist in 'origin/main'",
-        code: 128,
-      }),
+      exec: async (_cmd, args) => {
+        if (args[0] === 'rev-parse') return { stdout: '', stderr: '', code: 0 };
+        return { stdout: '', stderr: "fatal: path 'foo' does not exist in 'origin/main'", code: 128 };
+      },
     });
     expect(await reader.readAtRef('origin/main', 'foo')).toBeNull();
   });
@@ -148,11 +151,11 @@ describe('createFileReader', () => {
         readFile: async () => '',
         readdir: async () => [],
       },
-      exec: async () => ({
-        stdout: '',
-        stderr: "fatal: bad revision 'no-such'",
-        code: 128,
-      }),
+      exec: async (_cmd, args) => {
+        // `--show-prefix` succeeds (we are in a repo), verifying the ref fails.
+        if (args[0] === 'rev-parse' && args[1] === '--show-prefix') return { stdout: '', stderr: '', code: 0 };
+        return { stdout: '', stderr: "fatal: bad revision 'no-such'", code: 128 };
+      },
     });
     await expect(reader.readAtRef('no-such', 'foo')).rejects.toThrow(/bad revision/);
   });

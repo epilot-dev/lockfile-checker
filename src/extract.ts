@@ -768,6 +768,13 @@ function joinDir(dir: string, p: string): string {
  * `git show <ref>:<path>`; `listAtRefDir` shells out to `git ls-tree -d`.
  * Methods return `null` when the target is absent (ENOENT, git exit 128);
  * other failures propagate.
+ *
+ * `cwd` may be a sub-directory of the repository (CI scans standalone
+ * sub-projects such as `lambda/Handler`). Git's `<ref>:<path>` syntax is
+ * always repository-relative, so every ref path is prefixed with the output
+ * of `git rev-parse --show-prefix`; without that, `<ref>:package-lock.json`
+ * from `lambda/Handler` silently resolves the *root* lockfile at the base ref
+ * and every package in the sub-project reads as newly added.
  */
 export function createFileReader(deps: {
   cwd: string;
@@ -781,6 +788,43 @@ export function createFileReader(deps: {
     code: number;
   }>;
 }): FileReader {
+  let prefixPromise: Promise<string> | null = null;
+  /**
+   * Path of `cwd` relative to the repository root, with a trailing slash, or
+   * `''` at the root (or when git cannot tell — e.g. not a repository, in
+   * which case ref reads fail on their own anyway).
+   */
+  const repoPrefix = (): Promise<string> => {
+    prefixPromise ??= deps
+      .exec('git', ['rev-parse', '--show-prefix'], deps.cwd)
+      .then((r) => (r.code === 0 ? r.stdout.trim() : ''))
+      .catch(() => '');
+    return prefixPromise;
+  };
+  /**
+   * `git show`/`git ls-tree` exit 128 both for a missing path at a valid ref
+   * and for an unresolvable ref, and the messages differ between git versions
+   * (and are identical for `ls-tree`). Verify the ref itself to tell them
+   * apart: an unresolvable ref is a caller error and must surface (exit 2),
+   * a missing path is a normal `null`.
+   */
+  const verifiedRefs = new Map<string, Promise<boolean>>();
+  const refExists = (ref: string): Promise<boolean> => {
+    let p = verifiedRefs.get(ref);
+    if (!p) {
+      p = deps
+        .exec('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], deps.cwd)
+        .then((r) => r.code === 0);
+      verifiedRefs.set(ref, p);
+    }
+    return p;
+  };
+  const missingPathOrThrow = async (ref: string, stderr: string): Promise<null> => {
+    if (!(await refExists(ref))) {
+      throw new Error(`git: ${stderr.trim() || `unable to resolve ref '${ref}'`}`);
+    }
+    return null;
+  };
   return {
     async readHead(path: string): Promise<string | null> {
       try {
@@ -791,16 +835,10 @@ export function createFileReader(deps: {
       }
     },
     async readAtRef(ref: string, path: string): Promise<string | null> {
-      const result = await deps.exec('git', ['show', `${ref}:${path}`], deps.cwd);
+      const prefix = await repoPrefix();
+      const result = await deps.exec('git', ['show', `${ref}:${prefix}${path}`], deps.cwd);
       if (result.code === 0) return result.stdout;
-      // git show returns 128 for missing path-at-ref and for unresolvable refs.
-      // Distinguish: if stderr mentions the ref itself ("unknown revision",
-      // "bad revision"), surface as a thrown error so the caller exits 2.
-      const stderr = result.stderr;
-      if (/unknown revision|bad revision|not a valid object name/i.test(stderr)) {
-        throw new Error(`git: ${stderr.trim()}`);
-      }
-      return null;
+      return missingPathOrThrow(ref, result.stderr);
     },
     async listHeadDir(path: string): Promise<string[] | null> {
       try {
@@ -815,22 +853,24 @@ export function createFileReader(deps: {
       // `git ls-tree -d --name-only <ref> <path>/` lists immediate directory
       // children of <path>. Trailing slash and `-d` together restrict the
       // output to directories one level down.
-      const target = path === '.' || path === '' ? `${ref}:` : `${ref}:${path}/`;
-      const result = await deps.exec('git', ['ls-tree', '-d', '--name-only', target], deps.cwd);
-      if (result.code !== 0) {
-        const stderr = result.stderr;
-        if (/unknown revision|bad revision|not a valid object name/i.test(stderr)) {
-          throw new Error(`git: ${stderr.trim()}`);
-        }
-        return null;
-      }
+      // `--full-tree` stops git from implicitly restricting the listing to
+      // the current working directory, which would yield nothing when `cwd`
+      // is a sub-project and the target tree is that sub-project itself.
+      const prefix = await repoPrefix();
+      const dir = path === '.' || path === '' ? prefix : `${prefix}${path}/`;
+      const target = `${ref}:${dir}`;
+      const result = await deps.exec(
+        'git',
+        ['ls-tree', '-d', '--name-only', '--full-tree', target],
+        deps.cwd,
+      );
+      if (result.code !== 0) return missingPathOrThrow(ref, result.stderr);
       // Output is one path per line. For nested paths (`apps/foo/bar`) we want
       // just the leaf segment, since the caller asked for children of <path>.
-      const prefix = path === '.' || path === '' ? '' : `${path}/`;
       return result.stdout
         .split('\n')
         .filter((s) => s.length > 0)
-        .map((s) => (s.startsWith(prefix) ? s.slice(prefix.length) : s));
+        .map((s) => (s.startsWith(dir) ? s.slice(dir.length) : s));
     },
   };
 }
